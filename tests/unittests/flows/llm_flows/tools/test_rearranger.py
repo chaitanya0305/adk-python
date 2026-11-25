@@ -664,6 +664,40 @@ def test_rearrange_history_async_parallel_responses_merged_next_to_call():
   assert result[2] == intervening_user
 
 
+def test_rearrange_history_splits_shared_response_event_across_calls():
+  """One response event answering calls from two turns pairs each with its own call."""
+  call_slow = _call_event("c_slow", "slow_tool")
+  user_wait = Event(author="user", content=types.UserContent("waiting..."))
+  call_fast = _call_event("c_fast", "fast_tool")
+  shared_response = Event(
+      author="user",
+      content=types.UserContent([
+          types.Part(
+              function_response=types.FunctionResponse(
+                  id="c_fast", name="fast_tool", response={"fast": True}
+              )
+          ),
+          types.Part(
+              function_response=types.FunctionResponse(
+                  id="c_slow", name="slow_tool", response={"slow": True}
+              )
+          ),
+      ]),
+  )
+  reply = _model_text_event("both done", invocation_id="inv2")
+  events = [call_slow, user_wait, call_fast, shared_response, reply]
+
+  result = rearrange_events_for_async_function_responses_in_history(events)
+
+  assert len(result) == 6
+  assert result[0] == call_slow
+  assert [r.id for r in result[1].get_function_responses()] == ["c_slow"]
+  assert result[2] == user_wait
+  assert result[3] == call_fast
+  assert [r.id for r in result[4].get_function_responses()] == ["c_fast"]
+  assert result[5] == reply
+
+
 def test_backward_compatibility_aliases_exported():
   """Private leading-underscore aliases are exported for backward compatibility."""
   assert (

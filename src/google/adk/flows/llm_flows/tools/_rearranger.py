@@ -107,6 +107,48 @@ def _is_stale_text_reply(event: Event, invocation_id: str) -> bool:
   )
 
 
+def _response_parts_for_call_event(
+    events: list[Event],
+    response_event_index: int,
+    call_event_index: int,
+    owning_call_event_indices: set[int],
+    call_event_indices_by_id: dict[str | None, list[int]],
+) -> Event:
+  """Returns the response event narrowed to the parts that answer one call event.
+
+  A response event that answers a single call event is returned unchanged.
+  When it answers several, each call event gets only its own function
+  responses, and the remaining parts stay with the latest call event it
+  answers, so no part is replayed twice.
+  """
+  response_event = events[response_event_index]
+  if owning_call_event_indices == {call_event_index}:
+    return response_event
+  keeps_other_parts = call_event_index == max(owning_call_event_indices)
+  kept_parts: list[types.Part] = []
+  response_parts = (
+      response_event.content.parts if response_event.content else None
+  )
+  for part in response_parts or []:
+    function_response = part.function_response
+    call_event_indices = (
+        call_event_indices_by_id.get(function_response.id)
+        if function_response
+        else None
+    )
+    if not call_event_indices:
+      if keeps_other_parts:
+        kept_parts.append(part)
+      continue
+    preceding_calls = bisect_left(call_event_indices, response_event_index)
+    if call_event_indices[max(preceding_calls - 1, 0)] == call_event_index:
+      kept_parts.append(part)
+  narrowed_event = response_event.model_copy(deep=True)
+  if narrowed_event.content:
+    narrowed_event.content.parts = kept_parts
+  return narrowed_event
+
+
 def rearrange_events_for_async_function_responses_in_history(
     events: list[Event],
 ) -> list[Event]:
@@ -126,6 +168,10 @@ def rearrange_events_for_async_function_responses_in_history(
       call_event_indices_by_id.setdefault(function_call.id, []).append(i)
 
   response_event_indices_by_call: dict[tuple[str | None, int], list[int]] = {}
+  # The call events each response event answers. One response event can answer
+  # calls made in different model turns, e.g. a client posting back the results
+  # of two long-running tools in one message.
+  owning_call_event_indices_by_response_event: dict[int, set[int]] = {}
   history_has_function_responses = False
   for i, event in enumerate(events):
     for function_response in event.get_function_responses():
@@ -140,6 +186,9 @@ def rearrange_events_for_async_function_responses_in_history(
       owning_call_event_index = call_event_indices[max(preceding_calls - 1, 0)]
       call_key = (function_response.id, owning_call_event_index)
       response_event_indices_by_call.setdefault(call_key, []).append(i)
+      owning_call_event_indices_by_response_event.setdefault(i, set()).add(
+          owning_call_event_index
+      )
 
   if not history_has_function_responses:
     return events
@@ -187,15 +236,21 @@ def rearrange_events_for_async_function_responses_in_history(
       result_events.append(event)
       if not function_response_events_indices:
         continue
-      if len(function_response_events_indices) == 1:
-        result_events.append(
-            events[next(iter(function_response_events_indices))]
-        )
+      function_response_events = [
+          _response_parts_for_call_event(
+              events,
+              response_event_index,
+              i,
+              owning_call_event_indices_by_response_event[response_event_index],
+              call_event_indices_by_id,
+          )
+          for response_event_index in sorted(function_response_events_indices)
+      ]
+      if len(function_response_events) == 1:
+        result_events.append(function_response_events[0])
       else:  # Merge all async function_response as one response event
         result_events.append(
-            merge_function_response_events(
-                [events[i] for i in sorted(function_response_events_indices)]
-            )
+            merge_function_response_events(function_response_events)
         )
       continue
     else:
