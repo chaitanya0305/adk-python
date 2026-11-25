@@ -285,9 +285,12 @@ def _validate_resume_response(response_data: object, schema: object) -> object:
         if prop_name in required:
           fields[prop_name] = (prop_type, ...)
         else:
+          # An omitted optional field takes the schema's default, as the
+          # model the schema came from would give it. Filling None instead
+          # makes that model reject the answer downstream.
           fields[prop_name] = (
               prop_type | None,
-              None,
+              prop_schema.get('default'),
           )
 
       try:
