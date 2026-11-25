@@ -19,6 +19,7 @@ from google.adk.events.event import NodeInfo
 from google.adk.events.event_actions import EventActions
 from google.adk.events.request_input import RequestInput
 from google.adk.workflow._base_node import BaseNode
+from google.adk.workflow._errors import WorkflowDataError
 from google.adk.workflow.utils._rehydration_utils import _ChildScanState
 from google.adk.workflow.utils._rehydration_utils import _process_rehydrated_output
 from google.adk.workflow.utils._rehydration_utils import _reconstruct_node_states
@@ -549,7 +550,7 @@ class TestScanNodeEvents:
   def test_scan_keeps_object_answer_with_a_result_field(
       self, response, expected
   ):
-    """An object answer whose only field is "result" is not unwrapped."""
+    """An object answer for a schema with a "result" field is kept as is."""
 
     class Review(BaseModel):
       result: str
@@ -582,6 +583,80 @@ class TestScanNodeEvents:
     )
 
     assert results["node_a@1"].resolved_responses["interrupt-1"] == expected
+
+  def test_scan_keeps_object_answer_with_an_object_result_field(self):
+    """A "result" field that holds an object is not taken as the answer."""
+
+    class Check(BaseModel):
+      result: dict[str, int]
+
+    ri = RequestInput(interrupt_id="interrupt-1", response_schema=Check)
+    event_int = create_request_input_event(ri)
+    event_int.node_info = NodeInfo(path="/wf@1/node_a@1")
+    event_int.invocation_id = "test_id"
+    event_fr = Event(
+        author="user",
+        content=types.Content(
+            parts=[
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        id="interrupt-1",
+                        name="adk_request_input",
+                        response={"result": {"k": 1}},
+                    )
+                )
+            ]
+        ),
+        invocation_id="test_id",
+    )
+
+    results = _reconstruct_node_states(
+        [event_int, event_fr],
+        "/wf@1",
+        invocation_id="test_id",
+        group_by_direct_child=True,
+    )
+
+    assert results["node_a@1"].resolved_responses["interrupt-1"] == {
+        "result": {"k": 1}
+    }
+
+  def test_scan_rejects_text_answer_for_object_schema_without_result_field(
+      self,
+  ):
+    """Text that is not JSON does not resolve an object schema."""
+
+    class Options(BaseModel):
+      a: int = 1
+      b: str = "x"
+
+    ri = RequestInput(interrupt_id="interrupt-1", response_schema=Options)
+    event_int = create_request_input_event(ri)
+    event_int.node_info = NodeInfo(path="/wf@1/node_a@1")
+    event_int.invocation_id = "test_id"
+    event_fr = Event(
+        author="user",
+        content=types.Content(
+            parts=[
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        id="interrupt-1",
+                        name="adk_request_input",
+                        response={"result": "hello"},
+                    )
+                )
+            ]
+        ),
+        invocation_id="test_id",
+    )
+
+    with pytest.raises(WorkflowDataError):
+      _reconstruct_node_states(
+          [event_int, event_fr],
+          "/wf@1",
+          invocation_id="test_id",
+          group_by_direct_child=True,
+      )
 
   def test_scan_does_not_evaluate_a_string_schema_from_an_event(self, tmp_path):
     """The model writes the request_input args, so a schema is never code."""

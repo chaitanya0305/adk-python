@@ -369,11 +369,17 @@ def _reconstruct_node_states(
           if (
               isinstance(schema, dict)
               and schema.get('type') == 'object'
+              and isinstance(schema.get('properties'), dict)
+              and _RESULT_KEY in schema['properties']
               and isinstance(fr.response, dict)
-              and not isinstance(response_data, dict)
+              and not (
+                  isinstance(fr.response.get(_RESULT_KEY), str)
+                  and isinstance(response_data, dict)
+              )
           ):
-            # An object answer whose only field is named "result" is the
-            # answer itself, not a wrapped value.
+            # The schema has its own "result" field, so {"result": value} is
+            # the answer itself. A text reply wrapped as {"result": "<json>"}
+            # that parses to an object is still unwrapped.
             response_data = fr.response
           if schema:
             try:
