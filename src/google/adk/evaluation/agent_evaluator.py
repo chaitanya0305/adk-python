@@ -841,26 +841,24 @@ class AgentEvaluator:
       inference_config = InferenceConfig(use_live=False)
     if parallelism is not None:
       inference_config.parallelism = parallelism
+    # The service runs the repeats itself, labelling each with its
+    # `repetition_index`, and gives every run a fresh session even when the
+    # eval case pins a session id.
+    inference_config.num_runs = num_runs
 
-    inference_requests = [
-        InferenceRequest(
-            app_name=app_name,
-            eval_set_id=eval_set.eval_set_id,
-            inference_config=inference_config,
-        )
-    ] * num_runs  # Repeat inference request num_runs times.
+    inference_request = InferenceRequest(
+        app_name=app_name,
+        eval_set_id=eval_set.eval_set_id,
+        inference_config=inference_config,
+    )
 
     # Generate inferences
     inference_results = []
-    for repetition_index, inference_request in enumerate(inference_requests):
-      async with Aclosing(
-          eval_service.perform_inference(inference_request=inference_request)
-      ) as agen:
-        async for inference_result in agen:
-          # Each request runs every eval case once, so the request's position
-          # is the run index.
-          inference_result.repetition_index = repetition_index
-          inference_results.append(inference_result)
+    async with Aclosing(
+        eval_service.perform_inference(inference_request=inference_request)
+    ) as agen:
+      async for inference_result in agen:
+        inference_results.append(inference_result)
 
     # Evaluate metrics
     # As we perform more than one run for an eval case, we collect eval results

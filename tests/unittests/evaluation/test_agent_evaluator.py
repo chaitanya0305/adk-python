@@ -33,6 +33,7 @@ from google.adk.evaluation.agent_evaluator import load_json
 from google.adk.evaluation.base_eval_service import InferenceResult
 from google.adk.evaluation.eval_case import EvalCase
 from google.adk.evaluation.eval_case import Invocation
+from google.adk.evaluation.eval_case import SessionInput
 from google.adk.evaluation.eval_config import EvalConfig
 from google.adk.evaluation.eval_config import LiveModelConfig
 from google.adk.evaluation.eval_metrics import EvalMetric
@@ -47,6 +48,7 @@ from google.adk.evaluation.evaluator import EvalStatus
 from google.adk.evaluation.metric_evaluator_registry import DEFAULT_METRIC_EVALUATOR_REGISTRY
 from google.adk.evaluation.simulation.user_simulator_provider import UserSimulatorProvider
 from google.adk.evaluation.trajectory_evaluator import TrajectoryEvaluator
+from google.adk.events.event import Event
 from google.adk.workflow import Workflow
 from google.genai import types as genai_types
 import pandas as pd
@@ -118,14 +120,15 @@ async def test_get_eval_results_by_eval_id_labels_each_run_with_its_index(
   """The results of each repeated run carry that run's 0-based index."""
 
   async def _perform_inference(inference_request):
-    # Every request runs each eval case once, so the service labels it run 0.
-    yield InferenceResult(
-        app_name=inference_request.app_name,
-        eval_set_id=inference_request.eval_set_id,
-        eval_case_id="case1",
-        session_id=None,
-        repetition_index=0,
-    )
+    # The service runs each eval case `num_runs` times and labels every run.
+    for repetition_index in range(inference_request.inference_config.num_runs):
+      yield InferenceResult(
+          app_name=inference_request.app_name,
+          eval_set_id=inference_request.eval_set_id,
+          eval_case_id="case1",
+          session_id=None,
+          repetition_index=repetition_index,
+      )
 
   async def _evaluate(evaluate_request):
     for inference_result in evaluate_request.inference_results:
@@ -162,6 +165,60 @@ async def test_get_eval_results_by_eval_id_labels_each_run_with_its_index(
       eval_result.repetition_index
       for eval_result in eval_results_by_eval_id["case1"]
   ] == [0, 1, 2]
+
+
+class _UserMessageCountingAgent(BaseAgent):
+  """Replies with how many user messages its session holds."""
+
+  async def _run_async_impl(self, ctx):
+    count = sum(1 for event in ctx.session.events if event.author == "user")
+    yield Event(
+        author=self.name,
+        invocation_id=ctx.invocation_id,
+        content=genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(text=f"user messages seen {count}")],
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_evaluate_eval_set_runs_each_repeat_in_a_fresh_pinned_session():
+  """With num_runs > 1, a later run must not reuse an earlier run's session.
+
+  The eval case pins a session id. Reusing it would show the second run the
+  first run's conversation, so the agent would see two user messages.
+  """
+  eval_set = EvalSet(
+      eval_set_id="test_eval_set",
+      eval_cases=[
+          EvalCase(
+              eval_id="case1",
+              conversation=[
+                  Invocation(
+                      user_content=genai_types.Content(
+                          role="user", parts=[genai_types.Part(text="hi")]
+                      ),
+                      final_response=genai_types.Content(
+                          role="model",
+                          parts=[genai_types.Part(text="user messages seen 1")],
+                      ),
+                  )
+              ],
+              session_input=SessionInput(
+                  app_name="test_app", user_id="user", session_id="pinned"
+              ),
+          )
+      ],
+  )
+
+  await AgentEvaluator.evaluate_eval_set(
+      agent_module=_UserMessageCountingAgent(name="counter"),
+      eval_set=eval_set,
+      eval_config=EvalConfig(criteria={"response_match_score": 1.0}),
+      num_runs=2,
+      print_detailed_results=False,
+  )
 
 
 @pytest.mark.asyncio
