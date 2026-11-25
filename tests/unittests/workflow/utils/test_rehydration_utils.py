@@ -230,6 +230,27 @@ class TestValidateResumeResponse:
     with pytest.raises(ValueError, match="Failed to coerce data to object"):
       _validate_resume_response("not a dict", schema)
 
+  def test_object_schema_fills_omitted_fields_with_schema_defaults(self):
+    """An omitted optional field gets its declared default, not None."""
+
+    class Decision(BaseModel):
+      approved: bool
+      priority: int = 3
+      tags: list[str] = []
+      note: str | None = None
+
+    result = _validate_resume_response(
+        {"approved": True}, Decision.model_json_schema()
+    )
+
+    assert result == {
+        "approved": True,
+        "priority": 3,
+        "tags": [],
+        "note": None,
+    }
+    assert Decision.model_validate(result) == Decision(approved=True)
+
   def test_array_schema_validates_list_type(self):
     schema = {"type": "array"}
     assert _validate_resume_response([1, 2], schema) == [1, 2]
