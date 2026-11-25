@@ -698,6 +698,47 @@ def test_rearrange_history_splits_shared_response_event_across_calls():
   assert result[5] == reply
 
 
+def test_rearrange_history_shared_response_keeps_text_when_later_update_supersedes():
+  """Non-response parts of a shared event stay with a call that still uses it."""
+  call_a = _call_event("c_a", "tool_a")
+  user_wait = Event(author="user", content=types.UserContent("waiting..."))
+  call_b = _call_event("c_b", "tool_b")
+  shared_response = Event(
+      author="user",
+      content=types.UserContent([
+          types.Part(
+              function_response=types.FunctionResponse(
+                  id="c_a", name="tool_a", response={"result": "a1"}
+              )
+          ),
+          types.Part(
+              function_response=types.FunctionResponse(
+                  id="c_b", name="tool_b", response={"result": "b1"}
+              )
+          ),
+          types.Part(text="note"),
+      ]),
+  )
+  later_b_update = _resp_event("c_b", "tool_b", "b2", author="user")
+  reply = _model_text_event("ok", invocation_id="inv2")
+  events = [
+      call_a,
+      user_wait,
+      call_b,
+      shared_response,
+      later_b_update,
+      reply,
+  ]
+
+  result = rearrange_events_for_async_function_responses_in_history(events)
+
+  assert len(result) == 6
+  assert [r.id for r in result[1].get_function_responses()] == ["c_a"]
+  assert [p.text for p in result[1].content.parts if p.text] == ["note"]
+  assert result[4].get_function_responses()[0].response == {"result": "b2"}
+  assert result[5] == reply
+
+
 def test_backward_compatibility_aliases_exported():
   """Private leading-underscore aliases are exported for backward compatibility."""
   assert (

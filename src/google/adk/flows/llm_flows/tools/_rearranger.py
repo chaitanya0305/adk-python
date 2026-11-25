@@ -112,19 +112,21 @@ def _response_parts_for_call_event(
     response_event_index: int,
     call_event_index: int,
     owning_call_event_indices: set[int],
+    last_using_call_event_index: int,
     call_event_indices_by_id: dict[str | None, list[int]],
 ) -> Event:
   """Returns the response event narrowed to the parts that answer one call event.
 
   A response event that answers a single call event is returned unchanged.
   When it answers several, each call event gets only its own function
-  responses, and the remaining parts stay with the latest call event it
-  answers, so no part is replayed twice.
+  responses, and the remaining parts stay with the latest call event that
+  takes this event as its final response, so no part is replayed twice and
+  none is lost when a later event supersedes the result of the latest call.
   """
   response_event = events[response_event_index]
   if owning_call_event_indices == {call_event_index}:
     return response_event
-  keeps_other_parts = call_event_index == max(owning_call_event_indices)
+  keeps_other_parts = call_event_index == last_using_call_event_index
   kept_parts: list[types.Part] = []
   response_parts = (
       response_event.content.parts if response_event.content else None
@@ -193,6 +195,23 @@ def rearrange_events_for_async_function_responses_in_history(
   if not history_has_function_responses:
     return events
 
+  # The latest call event that takes each response event as its final
+  # response. A call whose result a later event updates does not use the
+  # earlier event, so it cannot carry that event's other parts.
+  last_using_call_event_index_by_response_event: dict[int, int] = {}
+  for (
+      call_key,
+      answering_event_indices,
+  ) in response_event_indices_by_call.items():
+    call_event_index = call_key[1]
+    used_response_index = answering_event_indices[-1]
+    last_using_call_event_index_by_response_event[used_response_index] = max(
+        call_event_index,
+        last_using_call_event_index_by_response_event.get(
+            used_response_index, -1
+        ),
+    )
+
   # Drop intermediate model text replies between consecutive updates of the
   # same tool call within the same invocation.
   # Caveat: Positional; drops any intervening text replies during parallel calls.
@@ -242,6 +261,9 @@ def rearrange_events_for_async_function_responses_in_history(
               response_event_index,
               i,
               owning_call_event_indices_by_response_event[response_event_index],
+              last_using_call_event_index_by_response_event[
+                  response_event_index
+              ],
               call_event_indices_by_id,
           )
           for response_event_index in sorted(function_response_events_indices)

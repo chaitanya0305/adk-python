@@ -2583,3 +2583,74 @@ async def test_include_contents_none_ignores_submitted_tool_result_without_match
     pass
 
   assert llm_request.contents == [types.UserContent("current turn question")]
+
+
+def test_get_contents_pairs_results_posted_together_for_calls_from_two_turns():
+  """Results for calls from two turns, posted in one message, pair per call."""
+
+  def _call(call_id: str, name: str, invocation_id: str) -> Event:
+    return Event(
+        invocation_id=invocation_id,
+        author="my_agent",
+        content=types.ModelContent([
+            types.Part(
+                function_call=types.FunctionCall(id=call_id, name=name, args={})
+            )
+        ]),
+        long_running_tool_ids={call_id},
+    )
+
+  def _response(call_id: str, name: str, result: str) -> types.Part:
+    return types.Part(
+        function_response=types.FunctionResponse(
+            id=call_id, name=name, response={"result": result}
+        )
+    )
+
+  events = [
+      Event(invocation_id="i1", author="user", content=types.UserContent("A")),
+      _call("call_a", "tool_a", "i1"),
+      Event(invocation_id="i2", author="user", content=types.UserContent("B")),
+      _call("call_b", "tool_b", "i2"),
+      Event(
+          invocation_id="i3",
+          author="user",
+          content=types.UserContent([
+              _response("call_a", "tool_a", "A done"),
+              _response("call_b", "tool_b", "B done"),
+          ]),
+      ),
+      Event(
+          invocation_id="i3",
+          author="my_agent",
+          content=types.ModelContent("both done"),
+      ),
+      Event(
+          invocation_id="i4", author="user", content=types.UserContent("thanks")
+      ),
+  ]
+
+  result = contents._get_contents(  # pylint: disable=protected-access
+      None, events, agent_name="my_agent", preserve_function_call_ids=True
+  )
+
+  def _summary(content: types.Content) -> list[str]:
+    return [
+        f"call:{p.function_call.id}"
+        if p.function_call
+        else f"response:{p.function_response.id}"
+        if p.function_response
+        else p.text
+        for p in content.parts
+    ]
+
+  assert [_summary(c) for c in result] == [
+      ["A"],
+      ["call:call_a"],
+      ["response:call_a"],
+      ["B"],
+      ["call:call_b"],
+      ["response:call_b"],
+      ["both done"],
+      ["thanks"],
+  ]
