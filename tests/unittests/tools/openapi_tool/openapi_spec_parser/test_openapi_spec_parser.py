@@ -294,6 +294,25 @@ def test_parse_spec_with_servers(openapi_spec_generator):
   assert parsed_operations[0].endpoint.base_url == "https://api.example.com"
 
 
+def test_parse_spec_with_server_variables(openapi_spec_generator):
+  """Server URL variables are replaced with their default values."""
+  openapi_spec = create_minimal_openapi_spec()
+  openapi_spec["servers"] = [{
+      "url": "https://{region}.api.example.com/{basePath}",
+      "variables": {
+          "region": {"default": "us", "enum": ["us", "eu"]},
+          "basePath": {"default": "v2"},
+      },
+  }]
+
+  parsed_operations = openapi_spec_generator.parse(openapi_spec)
+
+  assert len(parsed_operations) == 1
+  assert (
+      parsed_operations[0].endpoint.base_url == "https://us.api.example.com/v2"
+  )
+
+
 def test_parse_spec_with_no_servers(openapi_spec_generator):
   """Test with no servers defined (should default to empty string)."""
   openapi_spec = create_minimal_openapi_spec()

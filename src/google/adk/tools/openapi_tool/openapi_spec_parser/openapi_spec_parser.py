@@ -47,6 +47,19 @@ _VALID_SCHEMA_TYPES: Set[str] = frozenset({
 _SCHEMA_CONTAINER_KEYS: Set[str] = frozenset({"schema", "schemas"})
 
 
+def _server_url(server: Dict[str, Any]) -> str:
+  """Returns a Server Object's URL with each variable set to its default.
+
+  A server URL such as ``https://{region}.example.com`` is a template, and
+  OpenAPI requires the default value to be used when no other is supplied.
+  """
+  url = server.get("url", "")
+  for name, variable in (server.get("variables") or {}).items():
+    if isinstance(variable, dict) and "default" in variable:
+      url = url.replace(f"{{{name}}}", str(variable["default"]))
+  return url
+
+
 class OperationEndpoint(BaseModel):
   base_url: str
   path: str
@@ -180,7 +193,7 @@ class OpenApiSpecParser:
     # Taking first server url, or default to empty string if not present
     base_url = ""
     if openapi_spec.get("servers"):
-      base_url = openapi_spec["servers"][0].get("url", "")
+      base_url = _server_url(openapi_spec["servers"][0])
 
     # Get global security scheme (if any).
     global_scheme_name = _required_scheme_name(openapi_spec.get("security"))
