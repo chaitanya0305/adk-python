@@ -539,6 +539,50 @@ class TestScanNodeEvents:
         "count": 42
     }
 
+  @pytest.mark.parametrize(
+      "response, expected",
+      [
+          ({"result": "pass"}, {"result": "pass"}),
+          ({"result": '{"result": "fail"}'}, {"result": "fail"}),
+      ],
+  )
+  def test_scan_keeps_object_answer_with_a_result_field(
+      self, response, expected
+  ):
+    """An object answer whose only field is "result" is not unwrapped."""
+
+    class Review(BaseModel):
+      result: str
+
+    ri = RequestInput(interrupt_id="interrupt-1", response_schema=Review)
+    event_int = create_request_input_event(ri)
+    event_int.node_info = NodeInfo(path="/wf@1/node_a@1")
+    event_int.invocation_id = "test_id"
+    event_fr = Event(
+        author="user",
+        content=types.Content(
+            parts=[
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        id="interrupt-1",
+                        name="adk_request_input",
+                        response=response,
+                    )
+                )
+            ]
+        ),
+        invocation_id="test_id",
+    )
+
+    results = _reconstruct_node_states(
+        [event_int, event_fr],
+        "/wf@1",
+        invocation_id="test_id",
+        group_by_direct_child=True,
+    )
+
+    assert results["node_a@1"].resolved_responses["interrupt-1"] == expected
+
   def test_scan_does_not_evaluate_a_string_schema_from_an_event(self, tmp_path):
     """The model writes the request_input args, so a schema is never code."""
     marker = tmp_path / "evaluated"

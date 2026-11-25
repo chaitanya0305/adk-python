@@ -366,6 +366,15 @@ def _reconstruct_node_states(
           response_data = _unwrap_response(
               fr.response, parse_json=not _schema_expects_text(schema)
           )
+          if (
+              isinstance(schema, dict)
+              and schema.get('type') == 'object'
+              and isinstance(fr.response, dict)
+              and not isinstance(response_data, dict)
+          ):
+            # An object answer whose only field is named "result" is the
+            # answer itself, not a wrapped value.
+            response_data = fr.response
           if schema:
             try:
               response_data = _validate_resume_response(response_data, schema)
