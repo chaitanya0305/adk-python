@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any
 from typing import Dict
 from typing import List
@@ -54,10 +55,17 @@ def _server_url(server: Dict[str, Any]) -> str:
   OpenAPI requires the default value to be used when no other is supplied.
   """
   url = server.get("url", "")
-  for name, variable in (server.get("variables") or {}).items():
+  variables = server.get("variables")
+  if not isinstance(variables, dict):
+    return url
+
+  def _default(match: re.Match[str]) -> str:
+    variable = variables.get(match.group(1))
     if isinstance(variable, dict) and "default" in variable:
-      url = url.replace(f"{{{name}}}", str(variable["default"]))
-  return url
+      return str(variable["default"])
+    return match.group(0)
+
+  return re.sub(r"\{([^{}]+)\}", _default, url)
 
 
 class OperationEndpoint(BaseModel):
