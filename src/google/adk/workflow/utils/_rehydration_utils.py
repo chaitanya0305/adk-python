@@ -276,6 +276,7 @@ def _validate_resume_response(response_data: object, schema: object) -> object:
       required = schema.get('required', [])
 
       fields: dict[str, Any] = {}
+      no_default: set[str] = set()
       for prop_name, prop_schema in properties.items():
         prop_type_str = prop_schema.get('type')
         prop_type = (
@@ -287,7 +288,11 @@ def _validate_resume_response(response_data: object, schema: object) -> object:
         else:
           # An omitted optional field takes the schema's default, as the
           # model the schema came from would give it. Filling None instead
-          # makes that model reject the answer downstream.
+          # makes that model reject the answer downstream. A field with no
+          # default in the schema (e.g. one with a default_factory) is left
+          # out of the answer, so the next node's own model can fill it.
+          if 'default' not in prop_schema:
+            no_default.add(prop_name)
           fields[prop_name] = (
               prop_type | None,
               prop_schema.get('default'),
@@ -301,7 +306,9 @@ def _validate_resume_response(response_data: object, schema: object) -> object:
         model_instance = TypeAdapter(DynamicModel).validate_python(
             response_data
         )
-        return model_instance.model_dump()
+        return model_instance.model_dump(
+            exclude=no_default - model_instance.model_fields_set
+        )
       except ValidationError as e:
         raise WorkflowDataError(
             f'Validation failed for object schema: {e}'

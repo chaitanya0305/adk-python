@@ -3159,3 +3159,72 @@ async def test_resume_keeps_branch_retried_while_sibling_waited_for_input(
       'flaky': 'flaky_ok',
       'asker': 'answered_yes',
   } in workflow_testing_utils.get_outputs(events2)
+
+
+class _ResumeDecision(BaseModel):
+  approved: bool
+  priority: int = 3
+  tags: list[str] = Field(default_factory=list)
+  reviewer: str = 'manager'
+  note: str | None = None
+
+
+@pytest.mark.parametrize('resumable', [False, True])
+@pytest.mark.parametrize('typed_as', ['model', 'dict'])
+@pytest.mark.asyncio
+async def test_resume_answer_omitting_optional_fields_keeps_defaults(
+    request: pytest.FixtureRequest, resumable: bool, typed_as: str
+):
+  """An answer that leaves out optional fields reaches the next node intact.
+
+  A field with a default in the schema gets that default. A field with only
+  a default_factory is left out, so the next node's model can fill it.
+  """
+  from google.adk.workflow import FunctionNode
+
+  received: list[Any] = []
+
+  def ask():
+    return RequestInput(
+        interrupt_id='ask1',
+        message='Decide',
+        response_schema=_ResumeDecision,
+    )
+
+  def after_model(node_input: _ResumeDecision):
+    received.append(node_input)
+
+  def after_dict(node_input: dict):
+    received.append(node_input)
+
+  node_a = FunctionNode(func=ask)
+  node_b = FunctionNode(func=after_model if typed_as == 'model' else after_dict)
+  app = App(
+      name=request.function.__name__,
+      root_agent=Workflow(
+          name='test_agent',
+          edges=[(START, node_a), (node_a, node_b)],
+      ),
+      resumability_config=(
+          ResumabilityConfig(is_resumable=True) if resumable else None
+      ),
+  )
+  runner = testing_utils.InMemoryRunner(app=app)
+
+  events1 = await runner.run_async(testing_utils.get_user_content('go'))
+  [interrupt_id] = extract_event_interrupt_ids(
+      workflow_testing_utils.get_request_input_events(events1)[0]
+  )
+  await runner.run_async(
+      new_message=testing_utils.UserContent(
+          create_request_input_response(interrupt_id, {'approved': True})
+      ),
+      invocation_id=events1[0].invocation_id,
+  )
+
+  if typed_as == 'model':
+    assert received == [_ResumeDecision(approved=True)]
+  else:
+    assert received == [
+        {'approved': True, 'priority': 3, 'reviewer': 'manager', 'note': None}
+    ]

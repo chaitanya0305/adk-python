@@ -29,6 +29,7 @@ from google.adk.workflow.utils._rehydration_utils import is_terminal_event
 from google.adk.workflow.utils._workflow_hitl_utils import create_request_input_event
 from google.genai import types
 from pydantic import BaseModel
+from pydantic import Field
 import pytest
 
 # --- _wrap_response ---
@@ -250,6 +251,38 @@ class TestValidateResumeResponse:
         "note": None,
     }
     assert Decision.model_validate(result) == Decision(approved=True)
+
+  def test_object_schema_leaves_out_omitted_fields_without_default(self):
+    """A field with no schema default (default_factory) is left out."""
+
+    class Decision(BaseModel):
+      approved: bool
+      tags: list[str] = Field(default_factory=list)
+
+    result = _validate_resume_response(
+        {"approved": True}, Decision.model_json_schema()
+    )
+
+    assert result == {"approved": True}
+    assert Decision.model_validate(result) == Decision(approved=True)
+
+  def test_object_schema_keeps_given_fields_without_default(self):
+    """A given field with no schema default is kept, even when None."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "approved": {"type": "boolean"},
+            "tags": {"type": "array"},
+        },
+        "required": ["approved"],
+    }
+
+    assert _validate_resume_response(
+        {"approved": True, "tags": ["x"]}, schema
+    ) == {"approved": True, "tags": ["x"]}
+    assert _validate_resume_response(
+        {"approved": True, "tags": None}, schema
+    ) == {"approved": True, "tags": None}
 
   def test_array_schema_validates_list_type(self):
     schema = {"type": "array"}
